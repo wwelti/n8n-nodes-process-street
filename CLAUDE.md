@@ -18,7 +18,8 @@ nodes/ProcessStreet/
   ProcessStreet.node.ts              # Action node (1 resource: Workflow Run)
   ProcessStreetTrigger.node.ts       # Webhook trigger (4 events)
   transport/processStreetApi.ts      # Shared HTTP helpers, pagination, error handling
-  methods/loadOptions.ts             # Dynamic dropdown loaders: getWorkflows, getTasks, getWorkflowFormFields
+  methods/loadOptions.ts             # Dynamic dropdown loaders: getWorkflows, getTasks, getTaskNames, getWorkflowFormFields, getMultiSelectFormFields, getMultiSelectFieldOptions
+  methods/resourceMapping.ts         # Resource mapper: getFormFields (dynamic form with Select/Dropdown choices)
   descriptions/
     WorkflowRunDescription.ts        # Workflow Run resource operations & fields
   processStreet.svg                  # Node icon
@@ -50,7 +51,7 @@ nodes/ProcessStreet/
 | GET | /workflows/{id}/form-fields | List form field definitions for a workflow template |
 | GET | /workflows/{id}/form-fields/{fieldId}/options | Get choices for a Select/MultiSelect field (see note below) |
 | GET | /workflow-runs/{id}/form-fields | Get form field values for a workflow run |
-| POST | /workflow-runs/{id}/form-fields | Update form field values (body: { fields: [{ id, value }] }) |
+| POST | /workflow-runs/{id}/form-fields | Update form field values (see Multi-Select note below) |
 | POST | /webhooks | Create webhook (body: { url, triggers[], workflowId?, taskId? }) |
 | DELETE | /webhooks/{id} | Delete webhook |
 
@@ -75,7 +76,31 @@ nodes/ProcessStreet/
 - Also returns `dataSetRowId` if the field's choices are sourced from a Data Set Saved View
 - This is how Make.com populates dropdown choices in its Process Street integration
 
-In `resourceMapping.ts`, call this endpoint for each `Select`/`Dropdown`/`MultiSelect` field after listing all form fields, then pass the results as `options` on the `ResourceMapperField`.
+In `resourceMapping.ts`, call this endpoint for each `Select`/`Dropdown` field after listing all form fields, then pass the results as `options` on the `ResourceMapperField`. MultiSelect fields are excluded from the resource mapper and handled via a separate `multiOptions` parameter (see below).
+
+### Updating Form Field Values (Key Discovery: `value` vs `values`)
+
+`POST /workflow-runs/{id}/form-fields` accepts `{ fields: [{ id, value?, values? }] }`.
+
+- **Single-value fields** (Text, Email, Select, Date, Number, etc.) use the **`value`** key (singular, string):
+  ```json
+  {"id": "fieldId", "value": "some text"}
+  ```
+- **Multi-value fields** (MultiSelect, MultiChoice, Members) use the **`values`** key (plural, array of strings):
+  ```json
+  {"id": "fieldId", "values": ["Option A", "Option B"]}
+  ```
+- Using `value` (singular) for a MultiSelect field returns **400 Bad Request**. This is the most common mistake.
+- The `values` array contains the **option label strings** (the display text from the `/options` endpoint).
+- This is a **replace** operation — send ALL items you want checked. Items not in the array are unchecked.
+- Both single-value and multi-value fields can be sent in the same request in the `fields` array.
+
+### Form Field Definition Structure
+
+Each form field from `GET /workflows/{id}/form-fields` has: `id`, `fieldType`, `key`, `taskId`, `audit`. Notable:
+- `taskId` links the field to a specific workflow task (the task that contains this form field)
+- `fieldType` values include: `Text`, `Textarea`, `Email`, `Select`, `MultiSelect`, `MultiChoice`, `Number`, `Date`, `File`, `SendRichEmail`, `Hidden`, `Subtasks`, `SubChecklist`, `Table`
+- MultiSelect fields do NOT embed their options in the field definition — options must be fetched separately via the `/options` endpoint
 
 ### API Limitations
 
@@ -83,12 +108,13 @@ In `resourceMapping.ts`, call this endpoint for each `Select`/`Dropdown`/`MultiS
 - No webhook triggers for data set record changes (use polling)
 - PUT /workflow-runs requires ALL fields (name, status, shared, dueDate) even if only updating one
 
-### n8n Resource Mapper Field Type Limitations
+### n8n Resource Mapper & MultiSelect UI Constraints
 
-- `type: 'array'` with `options` does **NOT** render as a multi-select picker — it always renders as a raw JSON array textarea regardless of options provided. Options are ignored for rendering purposes.
-- `type: 'options'` is the only type that renders a dropdown with choices from an `options` array (single-select only).
-- **MultiSelect fields are therefore rendered as `type: 'options'`** (single-select dropdown showing task names). Users who need to select multiple tasks must use an n8n expression returning a comma-separated string.
-- Do NOT attempt to use `type: 'array'` + `options` hoping for a checkbox/multi-select UI — it will never render that way.
+- **Resource mapper `type: 'array'`** with `options` does NOT render as a multi-select picker — it always renders as a raw JSON array textarea. Do NOT use it expecting a checkbox UI.
+- **Resource mapper `type: 'options'`** renders a single-select dropdown. No multi-select type exists in the resource mapper.
+- **MultiSelect fields are excluded from the resource mapper** and instead rendered as a top-level `multiOptions` parameter (`multiSelectValues`) which provides native n8n checkbox UI.
+- The `multiOptions` loads ALL options from ALL MultiSelect fields via `getMultiSelectFieldOptions`, grouped by field name with disabled header separators. Values are encoded as `fieldId:::optionValue` so the execution handler can group them by field.
+- **`loadOptionsDependsOn` does NOT work for sibling parameters inside a `fixedCollection`** — `getCurrentNodeParameter('siblingName')` returns `undefined` and `getCurrentNodeParameters()` also fails to expose siblings. This means cascading dropdowns inside fixedCollections are impossible in n8n. This is why MultiSelect uses a single flat `multiOptions` instead of a per-field fixedCollection.
 
 ## n8n Node Development Constraints
 

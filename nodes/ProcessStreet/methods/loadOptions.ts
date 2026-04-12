@@ -122,9 +122,9 @@ export async function getTaskNames(
 }
 
 /**
- * Loads ALL options from ALL MultiSelect fields as a flat list.
- * Each option is labeled with [field_name] prefix and encoded as
- * "fieldId:::optionValue" so the execution handler can group by field.
+ * Loads ALL options from ALL MultiSelect fields, grouped by field.
+ * Each field group has a disabled header for visual separation.
+ * Values are encoded as "fieldId:::optionValue" for execution grouping.
  */
 export async function getMultiSelectFieldOptions(
 	this: ILoadOptionsFunctions,
@@ -134,8 +134,8 @@ export async function getMultiSelectFieldOptions(
 
 	const BASE_URL = 'https://public-api.process.st/api/v1.1';
 
-	// Fetch ALL form fields, find MultiSelect fields
-	const allFields: any[] = [];
+	// Fetch ALL form fields
+	const allFormFields: any[] = [];
 	let url: string | undefined = `${BASE_URL}/workflows/${workflowId}/form-fields`;
 	while (url) {
 		const response = await this.helpers.httpRequestWithAuthentication.call(
@@ -144,12 +144,13 @@ export async function getMultiSelectFieldOptions(
 			{ method: 'GET', url, json: true },
 		) as any;
 		const page: any[] = response?.fields ?? response?.formFields ?? [];
-		if (Array.isArray(page)) allFields.push(...page);
+		if (Array.isArray(page)) allFormFields.push(...page);
 		const links: any[] = Array.isArray(response?.links) ? response.links : [];
 		url = links.find((l: any) => l.name === 'next')?.href;
 	}
 
-	const multiFields = allFields.filter((f: any) => {
+	// Find MultiSelect fields
+	const multiFields = allFormFields.filter((f: any) => {
 		const ft = String(f.fieldType ?? '').toLowerCase();
 		return (
 			MULTI_SELECT_FIELD_TYPES.has(ft) ||
@@ -159,7 +160,7 @@ export async function getMultiSelectFieldOptions(
 
 	if (multiFields.length === 0) return [];
 
-	// For each MultiSelect field, fetch its /options
+	// For each MultiSelect field, add a header + its options
 	const results: INodePropertyOptions[] = [];
 	for (const field of multiFields) {
 		const fieldId = String(field.id);
@@ -181,24 +182,24 @@ export async function getMultiSelectFieldOptions(
 				optUrl = links.find((l: any) => l.name === 'next')?.href;
 			}
 		} catch {
-			// Skip if /options fails for this field
+			// Skip this field
 		}
 
-		// Add a section header for this field group
 		if (fieldOptions.length > 0) {
+			// Disabled header for visual grouping
 			results.push({
 				name: `── ${fieldLabel} ──`,
-				value: `${fieldId}:::__header__`,
-				description: 'Select items below for this field',
+				value: `__header__${fieldId}`,
+				description: `Select items for ${fieldLabel}`,
 			});
-		}
 
-		for (const opt of fieldOptions) {
-			if (opt.value === undefined) continue;
-			results.push({
-				name: String(opt.label ?? opt.value),
-				value: `${fieldId}:::${String(opt.value)}`,
-			});
+			for (const opt of fieldOptions) {
+				if (opt.value === undefined) continue;
+				results.push({
+					name: String(opt.label ?? opt.value),
+					value: `${fieldId}:::${String(opt.value)}`,
+				});
+			}
 		}
 	}
 

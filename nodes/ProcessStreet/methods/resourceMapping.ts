@@ -17,7 +17,7 @@ function getParamValue(ctx: ILoadOptionsFunctions, paramName: string): string {
 	}
 }
 
-/** Field types excluded from the resource mapper (unsupported via API or handled separately). */
+/** Field types excluded from the resource mapper entirely (unsupported via API). */
 const EXCLUDED_FIELD_TYPES = new Set([
 	'SendRichEmail',
 	'File',
@@ -112,7 +112,7 @@ export async function getFormFields(
 		);
 	}
 
-	// Exclude unsupported types and MultiSelect (handled by fixedCollection section)
+	// Exclude unsupported types and MultiSelect (handled by multiSelectValues multiOptions)
 	const filteredFields = rawFormFields.filter((f: any) => {
 		if (EXCLUDED_FIELD_TYPES.has(f.fieldType as string)) return false;
 		const ft = String(f.fieldType ?? '').toLowerCase();

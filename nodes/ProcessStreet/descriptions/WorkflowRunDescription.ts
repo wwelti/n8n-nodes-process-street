@@ -167,51 +167,21 @@ export const workflowRunFields: INodeProperties[] = [
 	//    CREATE - Multi-Select Fields (checkboxes)
 	// ──────────────────────────────────────────
 	{
-		displayName: 'Multi-Select Fields',
-		name: 'multiSelectFields',
-		type: 'fixedCollection',
+		displayName: 'Multi-Select Values',
+		name: 'multiSelectValues',
+		type: 'multiOptions',
 		typeOptions: {
-			multipleValues: true,
+			loadOptionsMethod: 'getMultiSelectFieldOptions',
+			loadOptionsDependsOn: ['workflowId'],
 		},
-		placeholder: 'Add Multi-Select Field',
 		displayOptions: {
 			show: {
 				resource: ['workflowRun'],
 				operation: ['create'],
 			},
 		},
-		default: {},
-		description: 'Set checklist/multi-select form field values. Click "Add Multi-Select Field" to add an entry.',
-		options: [
-			{
-				name: 'fields',
-				displayName: 'Field',
-				values: [
-					{
-						displayName: 'Field Name or ID',
-						name: 'fieldId',
-						type: 'options',
-						typeOptions: {
-							loadOptionsMethod: 'getMultiSelectFormFields',
-							loadOptionsDependsOn: ['workflowId'],
-						},
-						default: '',
-						description: 'The multi-select form field to set. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
-					},
-					{
-						displayName: 'Values',
-						name: 'values',
-						type: 'multiOptions',
-						typeOptions: {
-							loadOptionsMethod: 'getMultiSelectFieldOptions',
-							loadOptionsDependsOn: ['workflowId'],
-						},
-						default: [],
-						description: 'Check off items for the selected field. Items are labeled with [field name] to identify which field they belong to.',
-					},
-				],
-			},
-		],
+		default: [],
+		description: 'Check off items for each multi-select (checklist) field. Items are grouped by field name.',
 	},
 
 	// ──────────────────────────────────────────

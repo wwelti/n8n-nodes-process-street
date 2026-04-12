@@ -90,66 +90,68 @@ async function handleWorkflowRun(
 			}
 		}
 
-		// 2. Multi-select fields fixedCollection (values encoded as "fieldId:::optionValue")
-		const multiSelectCollection = ctx.getNodeParameter(
-			'multiSelectFields',
+		// 2. Multi-select values (top-level multiOptions, encoded as "fieldId:::optionValue")
+		// MultiSelect/MultiChoice fields use "values" (plural, array) not "value" (singular).
+		const multiSelectValues = ctx.getNodeParameter(
+			'multiSelectValues',
 			i,
-			{ fields: [] },
-		) as { fields?: Array<{ fieldId: string; values: string[] }> };
+			[],
+		) as string[];
 
-		for (const entry of multiSelectCollection.fields ?? []) {
-			if (!entry.fieldId || !Array.isArray(entry.values) || entry.values.length === 0) continue;
-
-			const valuesForField: string[] = [];
-			for (const encoded of entry.values) {
+		if (Array.isArray(multiSelectValues) && multiSelectValues.length > 0) {
+			const msGrouped = new Map<string, string[]>();
+			for (const encoded of multiSelectValues) {
+				if (encoded.startsWith('__header__')) continue;
 				const sepIdx = encoded.indexOf(':::');
-				if (sepIdx === -1) {
-					valuesForField.push(encoded);
-					continue;
-				}
-				const encodedFieldId = encoded.substring(0, sepIdx);
+				if (sepIdx === -1) continue;
+				const fieldId = encoded.substring(0, sepIdx);
 				const optValue = encoded.substring(sepIdx + 3);
-				// Skip header markers and only include values matching the selected field
-				if (optValue === '__header__') continue;
-				if (encodedFieldId === entry.fieldId) {
-					valuesForField.push(optValue);
-				}
+				if (!msGrouped.has(fieldId)) msGrouped.set(fieldId, []);
+				msGrouped.get(fieldId)!.push(optValue);
 			}
-
-			if (valuesForField.length > 0) {
-				allFields.push({ id: entry.fieldId, value: valuesForField.join(',') });
+			for (const [fieldId, values] of msGrouped) {
+				allFields.push({ id: fieldId, values } as any);
 			}
 		}
 
-		// 3. Send all field updates in a single API call
+		// 3. Group entries by field ID and send one API call per unique field
 		if (allFields.length > 0) {
 			const runData = (createdRun.workflowRun ?? createdRun) as IDataObject;
 			const workflowRunId = runData.id as string;
-			try {
-				const requestBody = JSON.parse(
-					JSON.stringify({ fields: allFields }),
-				) as IDataObject;
-				await processStreetApiRequest.call(
-					ctx,
-					'POST',
-					`/workflow-runs/${workflowRunId}/form-fields`,
-					requestBody,
-				);
-			} catch (error) {
-				const apiError = error as any;
-				const details =
-					apiError?.response?.body?.details ||
-					apiError?.description ||
-					apiError?.message ||
-					'Unknown error';
+			const errors: string[] = [];
+
+			for (const field of allFields) {
+				try {
+					const requestBody = JSON.parse(
+						JSON.stringify({ fields: [field] }),
+					) as IDataObject;
+					await ctx.helpers.httpRequestWithAuthentication.call(
+						ctx,
+						'processStreetApi',
+						{
+							method: 'POST',
+							url: `https://public-api.process.st/api/v1.1/workflow-runs/${workflowRunId}/form-fields`,
+							body: requestBody,
+							json: true,
+						},
+					);
+				} catch (error) {
+					const e = error as any;
+					const msg = e?.message || 'Unknown error';
+					errors.push(`Field ${field.id} ("${String(field.value).substring(0, 50)}"): ${msg}`);
+				}
+			}
+
+			if (errors.length > 0) {
+				const errorDetail = errors.join('\n');
 				if (!ctx.continueOnFail()) {
 					throw new NodeOperationError(
 						ctx.getNode(),
-						`Workflow run created (ID: ${workflowRunId}) but form field update failed: ${details}`,
+						`Workflow run created (ID: ${workflowRunId}) but ${errors.length} field(s) failed:\n${errorDetail}`,
 						{ itemIndex: i },
 					);
 				}
-				(runData as IDataObject).formFieldError = String(details);
+				(runData as IDataObject).formFieldError = errorDetail;
 			}
 		}
 
