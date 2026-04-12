@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(test -d \"C:\\\\ClaudeCode\\\\N8N-PS-Node\")",
+      "Bash(cat /c/Users/walt/AppData/Local/Temp/claude/C--ClaudeCode-N8N-PS-Node/tasks/*.output)",
+      "WebFetch(domain:docs.n8n.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:public-api.process.st)"
+    ]
+  }
+}

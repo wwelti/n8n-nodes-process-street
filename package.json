@@ -1,0 +1,54 @@
+{
+	"name": "n8n-nodes-process-street",
+	"version": "0.1.0",
+	"description": "n8n community node for Process Street workflow automation",
+	"keywords": [
+		"n8n-community-node-package",
+		"n8n",
+		"process-street",
+		"workflow",
+		"automation",
+		"bpm"
+	],
+	"license": "MIT",
+	"author": {
+		"name": "Walt",
+		"email": ""
+	},
+	"repository": {
+		"type": "git",
+		"url": ""
+	},
+	"main": "dist/nodes/ProcessStreet/ProcessStreet.node.js",
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "tsc && npm run copy-icons",
+		"copy-icons": "copyfiles \"nodes/**/*.svg\" dist/",
+		"dev": "tsc --watch",
+		"lint": "eslint . --ext .ts",
+		"lintfix": "eslint . --ext .ts --fix",
+		"prepublishOnly": "npm run build"
+	},
+	"n8n": {
+		"n8nNodesApiVersion": 1,
+		"credentials": [
+			"dist/credentials/ProcessStreetApi.credentials.js"
+		],
+		"nodes": [
+			"dist/nodes/ProcessStreet/ProcessStreet.node.js",
+			"dist/nodes/ProcessStreet/ProcessStreetTrigger.node.js"
+		]
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"copyfiles": "^2.4.1",
+		"eslint": "^8.56.0",
+		"n8n-workflow": "*",
+		"typescript": "^5.5.0"
+	},
+	"peerDependencies": {
+		"n8n-workflow": "*"
+	}
+}
