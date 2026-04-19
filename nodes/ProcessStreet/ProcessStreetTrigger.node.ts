@@ -19,7 +19,7 @@ export class ProcessStreetTrigger implements INodeType {
 		version: 1,
 		subtitle: '={{$parameter["event"]}}',
 		description:
-			'Starts the workflow when a Process Street event occurs',
+			'Starts the workflow when a Process Street event occurs. ℹ️ For webhook triggers, activate the workflow to register the webhook — Process Street rejects n8n test-mode URLs.',
 		defaults: {
 			name: 'Process Street Trigger',
 		},

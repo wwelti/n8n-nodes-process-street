@@ -44,6 +44,7 @@ Real-time triggers powered by Process Street webhooks:
 
 - **Comment triggers** (New Comment, New Comment Attachment) are not supported because the Process Street v1.1 API does not expose comment endpoints or webhook triggers for comments.
 - The **Update Workflow Run** operation fetches the current state before updating because the Process Street API requires all fields on PUT requests.
+- **Due Date** on Create and Update must be at least 24 hours in the future. The Process Street API rejects near-future dates with a generic 400 error, so the node validates client-side and returns a clear message instead. If you're entering a local time, use a Luxon expression (example is provided in the Due Date field description) to produce a correctly-offset ISO 8601 string.
 
 ## Compatibility
 

@@ -259,6 +259,46 @@ export async function getMultiSelectFormFields(
 		}));
 }
 
+/**
+ * Returns active workflow runs filtered by the selected workflowId.
+ * Used for the Update/Delete/Get operations to pick a run from a dropdown.
+ */
+export async function getWorkflowRuns(
+	this: ILoadOptionsFunctions,
+): Promise<INodePropertyOptions[]> {
+	const workflowId = getParamValue(this, 'workflowId');
+	if (!workflowId) return [];
+
+	const allRuns: any[] = [];
+	let url: string | undefined =
+		`https://public-api.process.st/api/v1.1/workflow-runs?workflowId=${encodeURIComponent(workflowId)}`;
+
+	while (url) {
+		const response = await this.helpers.httpRequestWithAuthentication.call(
+			this,
+			'processStreetApi',
+			{ method: 'GET', url, json: true },
+		);
+
+		const page: any[] = response?.workflowRuns ?? [];
+		if (Array.isArray(page)) {
+			allRuns.push(...page);
+		}
+
+		const links: any[] = Array.isArray(response?.links) ? response.links : [];
+		url = links.find((link: any) => link.name === 'next')?.href;
+	}
+
+	return allRuns
+		.map((run: any) => ({
+			name: `${run.name as string} (${run.status as string})`,
+			value: run.id as string,
+		}))
+		.sort((a: INodePropertyOptions, b: INodePropertyOptions) =>
+			a.name.localeCompare(b.name),
+		);
+}
+
 export async function getWorkflowFormFields(
 	this: ILoadOptionsFunctions,
 ): Promise<INodePropertyOptions[]> {

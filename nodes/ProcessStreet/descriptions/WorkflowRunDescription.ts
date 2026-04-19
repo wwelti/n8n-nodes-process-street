@@ -115,7 +115,8 @@ export const workflowRunFields: INodeProperties[] = [
 				name: 'dueDate',
 				type: 'dateTime',
 				default: '',
-				description: 'Due date for the workflow run',
+				description:
+					'Due date for the workflow run. Must be at least 24 hours in the future (the Process Street API rejects past and near-future dates). To schedule a time in your local zone, use a Luxon expression, e.g. <code>{{ DateTime.now().setZone(\'America/Los_Angeles\').plus({ days: 14 }).set({ hour: 17, minute: 0, second: 0, millisecond: 0 }).toUTC().toISO() }}</code>.',
 			},
 			{
 				displayName: 'Shared',
@@ -185,7 +186,7 @@ export const workflowRunFields: INodeProperties[] = [
 	},
 
 	// ──────────────────────────────────────────
-	//          GET / UPDATE / DELETE
+	//          GET / DELETE (simple ID input)
 	// ──────────────────────────────────────────
 	{
 		displayName: 'Workflow Run ID',
@@ -195,7 +196,7 @@ export const workflowRunFields: INodeProperties[] = [
 		displayOptions: {
 			show: {
 				resource: ['workflowRun'],
-				operation: ['get', 'update', 'delete'],
+				operation: ['get', 'delete'],
 			},
 		},
 		default: '',
@@ -205,6 +206,39 @@ export const workflowRunFields: INodeProperties[] = [
 	// ──────────────────────────────────────────
 	//              UPDATE
 	// ──────────────────────────────────────────
+	{
+		displayName: 'Workflow Name or ID',
+		name: 'workflowId',
+		type: 'options',
+		typeOptions: {
+			loadOptionsMethod: 'getWorkflows',
+		},
+		required: true,
+		displayOptions: {
+			show: {
+				resource: ['workflowRun'],
+				operation: ['update'],
+			},
+		},
+		default: '',
+		description:
+			'The workflow template. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+	},
+	{
+		displayName: 'Run Name or ID',
+		name: 'workflowRunId',
+		type: 'string',
+		required: true,
+		displayOptions: {
+			show: {
+				resource: ['workflowRun'],
+				operation: ['update'],
+			},
+		},
+		default: '',
+		description:
+			'The workflow run ID to update (e.g. "gWP86fV7SaL63-ga7I5FVQ"). Typically passed from a previous node via expression.',
+	},
 	{
 		displayName: 'Update Fields',
 		name: 'updateFields',
@@ -218,7 +252,7 @@ export const workflowRunFields: INodeProperties[] = [
 		},
 		default: {},
 		description:
-			'Fields to update. Note: the Process Street API requires all fields to be sent on update, so unchanged fields will be fetched from the current run.',
+			'Metadata fields to update. Note: the Process Street API requires all fields to be sent on update, so unchanged fields will be fetched from the current run.',
 		options: [
 			{
 				displayName: 'Name',
@@ -244,7 +278,8 @@ export const workflowRunFields: INodeProperties[] = [
 				name: 'dueDate',
 				type: 'dateTime',
 				default: '',
-				description: 'New due date for the workflow run',
+				description:
+					'New due date for the workflow run. Must be at least 24 hours in the future (the Process Street API rejects past and near-future dates). To schedule a time in your local zone, use a Luxon expression, e.g. <code>{{ DateTime.now().setZone(\'America/Los_Angeles\').plus({ days: 14 }).set({ hour: 17, minute: 0, second: 0, millisecond: 0 }).toUTC().toISO() }}</code>.',
 			},
 			{
 				displayName: 'Shared',
@@ -254,6 +289,63 @@ export const workflowRunFields: INodeProperties[] = [
 				description: 'Whether the workflow run is shared',
 			},
 		],
+	},
+
+	// ──────────────────────────────────────────
+	//    UPDATE - Form Fields (Resource Mapper)
+	// ──────────────────────────────────────────
+	{
+		displayName: 'Form Fields',
+		name: 'formFields',
+		type: 'resourceMapper',
+		noDataExpression: true,
+		default: {
+			mappingMode: 'defineBelow',
+			value: null,
+		},
+		typeOptions: {
+			loadOptionsDependsOn: ['workflowId'],
+			resourceMapper: {
+				resourceMapperMethod: 'getFormFields',
+				mode: 'add',
+				fieldWords: {
+					singular: 'Field',
+					plural: 'Fields',
+				},
+				addAllFields: true,
+				multiKeyMatch: false,
+				supportAutoMap: false,
+			},
+		},
+		displayOptions: {
+			show: {
+				resource: ['workflowRun'],
+				operation: ['update'],
+			},
+		},
+		description:
+			'Set form field values to update. Only fields with values will be sent — leave fields empty to keep their current values.',
+	},
+
+	// ──────────────────────────────────────────
+	//    UPDATE - Multi-Select Fields (checkboxes)
+	// ──────────────────────────────────────────
+	{
+		displayName: 'Multi-Select Values',
+		name: 'multiSelectValues',
+		type: 'multiOptions',
+		typeOptions: {
+			loadOptionsMethod: 'getMultiSelectFieldOptions',
+			loadOptionsDependsOn: ['workflowId'],
+		},
+		displayOptions: {
+			show: {
+				resource: ['workflowRun'],
+				operation: ['update'],
+			},
+		},
+		default: [],
+		description: 'Check off items for each multi-select (checklist) field. Items are grouped by field name. This is a replace operation — send ALL items you want checked.',
 	},
 
 	// ──────────────────────────────────────────

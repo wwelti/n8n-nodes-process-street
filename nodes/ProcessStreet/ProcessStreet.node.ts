@@ -18,12 +18,46 @@ import {
 } from './descriptions/WorkflowRunDescription';
 import {
 	getWorkflows,
+	getWorkflowRuns,
 	getWorkflowFormFields,
 	getTaskNames,
 	getMultiSelectFormFields,
 	getMultiSelectFieldOptions,
 } from './methods/loadOptions';
 import { getFormFields } from './methods/resourceMapping';
+
+// The Process Street API rejects due dates that are "too close" to now,
+// and in practice anything inside a ~24h window is unreliable. Require
+// the due date to be at least one full day ahead to avoid surprise 400s.
+const DUE_DATE_MIN_BUFFER_MS = 24 * 60 * 60 * 1000;
+
+function validateFutureDueDate(
+	ctx: IExecuteFunctions,
+	dueDate: unknown,
+	i: number,
+): void {
+	if (dueDate === null || dueDate === undefined) return;
+	const iso = String(dueDate).trim();
+	if (!iso) return;
+
+	const parsed = new Date(iso).getTime();
+	if (Number.isNaN(parsed)) {
+		throw new NodeOperationError(
+			ctx.getNode(),
+			`Due Date is not a valid ISO 8601 date/time: "${iso}"`,
+			{ itemIndex: i },
+		);
+	}
+
+	const now = Date.now();
+	if (parsed <= now + DUE_DATE_MIN_BUFFER_MS) {
+		throw new NodeOperationError(
+			ctx.getNode(),
+			`Due Date must be at least 24 hours in the future. You entered ${new Date(parsed).toISOString()} (UTC), but the current time is ${new Date(now).toISOString()} (UTC). The Process Street API rejects due dates that are too close to "now". If you're entering a local time, make sure the ISO 8601 string includes a timezone offset (e.g. "-07:00"), or use a Luxon expression — see the field description for an example.`,
+			{ itemIndex: i },
+		);
+	}
+}
 
 async function handleWorkflowRun(
 	ctx: IExecuteFunctions,
@@ -57,6 +91,8 @@ async function handleWorkflowRun(
 				return existing[0] as IDataObject;
 			}
 		}
+
+		validateFutureDueDate(ctx, additionalFields.dueDate, i);
 
 		const body: IDataObject = { workflowId, name, ...additionalFields };
 		const createdRun = (await processStreetApiRequest.call(
@@ -130,7 +166,7 @@ async function handleWorkflowRun(
 						'processStreetApi',
 						{
 							method: 'POST',
-							url: `https://public-api.process.st/api/v1.1/workflow-runs/${workflowRunId}/form-fields`,
+							url: `https://public-api.process.st/api/v1.1/workflow-runs/${encodeURIComponent(workflowRunId)}/form-fields`,
 							body: requestBody,
 							json: true,
 						},
@@ -168,15 +204,32 @@ async function handleWorkflowRun(
 	}
 
 	if (operation === 'update') {
-		const workflowRunId = ctx.getNodeParameter('workflowRunId', i) as string;
+		const workflowRunId = (ctx.getNodeParameter('workflowRunId', i) as string).trim();
 		const updateFields = ctx.getNodeParameter('updateFields', i) as IDataObject;
 
+		if (!workflowRunId) {
+			throw new NodeOperationError(ctx.getNode(), 'Workflow Run ID is empty', { itemIndex: i });
+		}
+
+		validateFutureDueDate(ctx, updateFields.dueDate, i);
+
 		// The PS API requires all fields on PUT, so fetch current state first
-		const current = (await processStreetApiRequest.call(
-			ctx,
-			'GET',
-			`/workflow-runs/${workflowRunId}`,
-		)) as IDataObject;
+		let current: IDataObject;
+		try {
+			const response = (await processStreetApiRequest.call(
+				ctx,
+				'GET',
+				`/workflow-runs/${encodeURIComponent(workflowRunId)}`,
+			)) as IDataObject;
+			// API may return the run directly or nested under a key
+			current = (response.workflowRun ?? response) as IDataObject;
+		} catch (error) {
+			throw new NodeOperationError(
+				ctx.getNode(),
+				`Could not find workflow run with ID "${workflowRunId}". Make sure the ID is correct and the run exists.`,
+				{ itemIndex: i },
+			);
+		}
 
 		const body: IDataObject = {
 			name: (updateFields.name as string) || (current.name as string),
@@ -195,10 +248,95 @@ async function handleWorkflowRun(
 		await processStreetApiRequest.call(
 			ctx,
 			'PUT',
-			`/workflow-runs/${workflowRunId}`,
+			`/workflow-runs/${encodeURIComponent(workflowRunId)}`,
 			body,
 		);
-		return { ...current, ...updateFields } as IDataObject;
+
+		// ── Update form field values ────────────────────────────────────────
+		const allFields: Array<{ id: string; value?: string; values?: string[] }> = [];
+
+		// 1. Resource mapper fields
+		const formFieldsMapper = ctx.getNodeParameter(
+			'formFields',
+			i,
+			{ mappingMode: 'defineBelow', value: null },
+		) as ResourceMapperValue;
+
+		const mapperValues = formFieldsMapper.value;
+		if (mapperValues && typeof mapperValues === 'object') {
+			for (const [fieldId, fieldValue] of Object.entries(mapperValues)) {
+				if (fieldValue === null || fieldValue === undefined || fieldValue === '') continue;
+				allFields.push({
+					id: fieldId,
+					value: Array.isArray(fieldValue)
+						? (fieldValue as unknown[]).join(',')
+						: String(fieldValue),
+				});
+			}
+		}
+
+		// 2. Multi-select values (encoded as "fieldId:::optionValue")
+		const multiSelectValues = ctx.getNodeParameter(
+			'multiSelectValues',
+			i,
+			[],
+		) as string[];
+
+		if (Array.isArray(multiSelectValues) && multiSelectValues.length > 0) {
+			const msGrouped = new Map<string, string[]>();
+			for (const encoded of multiSelectValues) {
+				if (encoded.startsWith('__header__')) continue;
+				const sepIdx = encoded.indexOf(':::');
+				if (sepIdx === -1) continue;
+				const fieldId = encoded.substring(0, sepIdx);
+				const optValue = encoded.substring(sepIdx + 3);
+				if (!msGrouped.has(fieldId)) msGrouped.set(fieldId, []);
+				msGrouped.get(fieldId)!.push(optValue);
+			}
+			for (const [fieldId, values] of msGrouped) {
+				allFields.push({ id: fieldId, values });
+			}
+		}
+
+		// 3. Send form field updates one at a time
+		const errors: string[] = [];
+		for (const field of allFields) {
+			try {
+				const requestBody = JSON.parse(
+					JSON.stringify({ fields: [field] }),
+				) as IDataObject;
+				await ctx.helpers.httpRequestWithAuthentication.call(
+					ctx,
+					'processStreetApi',
+					{
+						method: 'POST',
+						url: `https://public-api.process.st/api/v1.1/workflow-runs/${encodeURIComponent(workflowRunId)}/form-fields`,
+						body: requestBody,
+						json: true,
+					},
+				);
+			} catch (error) {
+				const e = error as any;
+				const msg = e?.message || 'Unknown error';
+				errors.push(`Field ${field.id}: ${msg}`);
+			}
+		}
+
+		const result = { ...current, ...updateFields } as IDataObject;
+
+		if (errors.length > 0) {
+			const errorDetail = errors.join('\n');
+			if (!ctx.continueOnFail()) {
+				throw new NodeOperationError(
+					ctx.getNode(),
+					`Workflow run updated but ${errors.length} form field(s) failed:\n${errorDetail}`,
+					{ itemIndex: i },
+				);
+			}
+			result.formFieldError = errorDetail;
+		}
+
+		return result;
 	}
 
 	if (operation === 'delete') {
@@ -291,6 +429,7 @@ export class ProcessStreet implements INodeType {
 	methods = {
 		loadOptions: {
 			getWorkflows,
+			getWorkflowRuns,
 			getWorkflowFormFields,
 			getTaskNames,
 			getMultiSelectFormFields,

@@ -48,8 +48,72 @@ export async function processStreetApiRequest(
 			options,
 		);
 	} catch (error) {
-		throw new NodeApiError(this.getNode(), error as unknown as JsonObject);
+		throw buildProcessStreetApiError.call(this, error, method, endpoint);
 	}
+}
+
+/**
+ * Build a NodeApiError that surfaces the raw Process Street response body.
+ *
+ * The default NodeApiError wrapping often collapses the remote body into a
+ * generic message ("Your request is invalid or could not be processed by the
+ * service"), which hides the field-level reason from the n8n UI. Process
+ * Street typically returns a JSON body like `{ code, message, errors: [...] }`
+ * on 4xx — we stringify that and attach it as the error description so the
+ * user sees the actionable detail directly in the node panel.
+ */
+function buildProcessStreetApiError(
+	this: ContextType,
+	error: unknown,
+	method: IHttpRequestMethods,
+	endpoint: string,
+): NodeApiError {
+	const err = error as {
+		response?: { body?: unknown; statusCode?: number };
+		statusCode?: number;
+		httpCode?: number;
+		message?: string;
+		cause?: { response?: { body?: unknown } };
+	};
+
+	const body =
+		err?.response?.body ??
+		err?.cause?.response?.body ??
+		(err as IDataObject)?.body;
+	const statusCode =
+		err?.response?.statusCode ?? err?.statusCode ?? err?.httpCode;
+
+	let remoteMessage: string | undefined;
+	let description: string | undefined;
+
+	if (body !== undefined && body !== null) {
+		if (typeof body === 'string') {
+			description = body;
+			try {
+				const parsed = JSON.parse(body);
+				if (parsed && typeof parsed === 'object') {
+					remoteMessage = (parsed as IDataObject).message as string;
+					description = JSON.stringify(parsed, null, 2);
+				}
+			} catch {
+				// body wasn't JSON — keep the raw string as description
+			}
+		} else if (typeof body === 'object') {
+			remoteMessage = (body as IDataObject).message as string;
+			description = JSON.stringify(body, null, 2);
+		}
+	}
+
+	const message =
+		remoteMessage ??
+		err?.message ??
+		`Process Street API request failed (${method} ${endpoint})`;
+
+	return new NodeApiError(this.getNode(), error as unknown as JsonObject, {
+		message,
+		description,
+		httpCode: statusCode !== undefined ? String(statusCode) : undefined,
+	});
 }
 
 /**

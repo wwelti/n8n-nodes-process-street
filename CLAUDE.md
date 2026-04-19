@@ -18,8 +18,8 @@ nodes/ProcessStreet/
   ProcessStreet.node.ts              # Action node (1 resource: Workflow Run)
   ProcessStreetTrigger.node.ts       # Webhook trigger (4 events)
   transport/processStreetApi.ts      # Shared HTTP helpers, pagination, error handling
-  methods/loadOptions.ts             # Dynamic dropdown loaders: getWorkflows, getTasks, getTaskNames, getWorkflowFormFields, getMultiSelectFormFields, getMultiSelectFieldOptions
-  methods/resourceMapping.ts         # Resource mapper: getFormFields (dynamic form with Select/Dropdown choices)
+  methods/loadOptions.ts             # Dynamic dropdown loaders: getWorkflows, getWorkflowRuns, getTasks, getTaskNames, getWorkflowFormFields, getMultiSelectFormFields, getMultiSelectFieldOptions
+  methods/resourceMapping.ts         # Resource mapper: getFormFields (dynamic form with Select/Dropdown choices; excludes SendRichEmail, Subtasks, SubChecklist, Table)
   descriptions/
     WorkflowRunDescription.ts        # Workflow Run resource operations & fields
   processStreet.svg                  # Node icon
@@ -59,6 +59,14 @@ nodes/ProcessStreet/
 
 `TaskChecked`, `TaskUnchecked`, `TaskCheckedUnchecked`, `TaskReady`, `WorkflowRunCreated`, `WorkflowRunCompleted`
 
+### Webhook URL Constraint (Key Discovery)
+
+Process Street's `POST /webhooks` **rejects n8n's `/webhook-test/...` URLs** with a generic 400 "Your request is invalid or could not be processed by the service". This means the "Listen for test event" button in n8n does NOT work for the Process Street trigger — the webhook never gets registered.
+
+To test the trigger, users must **activate the workflow** in n8n, which exposes the production `/webhook/{id}/webhook` URL. Process Street accepts that URL and fires real events against it.
+
+The trigger node's `description` surfaces this so users see it in the node panel before hitting the wall. If you ever add a separate "test" affordance, it will need to go through Process Street's real event flow (or be mocked), not n8n's ephemeral test URL.
+
 ### API Response Keys
 
 - `/workflows` returns `{ workflows: [...] }`
@@ -76,7 +84,7 @@ nodes/ProcessStreet/
 - Also returns `dataSetRowId` if the field's choices are sourced from a Data Set Saved View
 - This is how Make.com populates dropdown choices in its Process Street integration
 
-In `resourceMapping.ts`, call this endpoint for each `Select`/`Dropdown` field after listing all form fields, then pass the results as `options` on the `ResourceMapperField`. MultiSelect fields are excluded from the resource mapper and handled via a separate `multiOptions` parameter (see below).
+In `resourceMapping.ts`, call this endpoint for each `Select`/`Dropdown` field after listing all form fields, then pass the results as `options` on the `ResourceMapperField`. MultiSelect fields are excluded from the resource mapper and handled via a separate `multiOptions` parameter (see below). Hidden and File fields are included in the resource mapper as string inputs (Hidden stores a string value; File accepts a URL).
 
 ### Updating Form Field Values (Key Discovery: `value` vs `values`)
 
@@ -95,6 +103,17 @@ In `resourceMapping.ts`, call this endpoint for each `Select`/`Dropdown` field a
 - This is a **replace** operation — send ALL items you want checked. Items not in the array are unchecked.
 - Both single-value and multi-value fields can be sent in the same request in the `fields` array.
 
+### Due Date Validation (Key Discovery)
+
+The Process Street API rejects `dueDate` values that are in the past **or** too close to "now" — empirically, anything inside roughly a 24-hour window returns a generic 400 `"Bad request - please check your parameters"` with no actionable detail. To give users a clear error instead, `ProcessStreet.node.ts` validates `dueDate` client-side via `validateFutureDueDate()` before POST `/workflow-runs` and PUT `/workflow-runs/{id}`:
+
+- Parses the user-supplied ISO 8601 string with `new Date()`. ISO strings always carry their UTC offset (either `Z` or `±HH:MM`), so no timezone dropdown is needed — the resulting timestamp is unambiguous.
+- Rejects NaN timestamps with a "not a valid ISO 8601" error.
+- Requires the date to be at least `DUE_DATE_MIN_BUFFER_MS` (24h) ahead of `Date.now()`, otherwise throws a `NodeOperationError` that shows both the entered UTC time and the current UTC time.
+- If a user legitimately needs a due date closer than 24h, relax the buffer or expose it as a node option — do not remove the validation entirely, as the API's 400 gives them nothing to debug.
+
+The field descriptions in `WorkflowRunDescription.ts` include a Luxon expression example (`DateTime.now().setZone(...).plus({ days: N }).toUTC().toISO()`) so users entering local times know how to generate a correctly-offset ISO string.
+
 ### Form Field Definition Structure
 
 Each form field from `GET /workflows/{id}/form-fields` has: `id`, `fieldType`, `key`, `taskId`, `audit`. Notable:
@@ -107,6 +126,7 @@ Each form field from `GET /workflows/{id}/form-fields` has: `id`, `fieldType`, `
 - No endpoints for comments or comment attachments in v1.1
 - No webhook triggers for data set record changes (use polling)
 - PUT /workflow-runs requires ALL fields (name, status, shared, dueDate) even if only updating one
+- `dueDate` must be at least ~24h in the future; near-future dates return a generic 400. See "Due Date Validation" above.
 
 ### n8n Resource Mapper & MultiSelect UI Constraints
 
@@ -115,6 +135,8 @@ Each form field from `GET /workflows/{id}/form-fields` has: `id`, `fieldType`, `
 - **MultiSelect fields are excluded from the resource mapper** and instead rendered as a top-level `multiOptions` parameter (`multiSelectValues`) which provides native n8n checkbox UI.
 - The `multiOptions` loads ALL options from ALL MultiSelect fields via `getMultiSelectFieldOptions`, grouped by field name with disabled header separators. Values are encoded as `fieldId:::optionValue` so the execution handler can group them by field.
 - **`loadOptionsDependsOn` does NOT work for sibling parameters inside a `fixedCollection`** — `getCurrentNodeParameter('siblingName')` returns `undefined` and `getCurrentNodeParameters()` also fails to expose siblings. This means cascading dropdowns inside fixedCollections are impossible in n8n. This is why MultiSelect uses a single flat `multiOptions` instead of a per-field fixedCollection.
+- **`validateType: 'string'` in `typeOptions` is NOT supported** in n8n v2.x for `type: 'options'` fields. If a field needs to accept both a dropdown selection AND a raw ID via expression, use `type: 'string'` instead. The `options` type validates expression values against the loaded options list and rejects unknown values with "is not supported" errors.
+- **URL-encode IDs in API calls** — always use `encodeURIComponent()` when embedding user-provided IDs in API endpoint URLs to handle special characters safely.
 
 ## n8n Node Development Constraints
 
@@ -145,6 +167,7 @@ Each form field from `GET /workflows/{id}/form-fields` has: `id`, `fieldType`, `
   }
   ```
   The next-page link has `name: "next"` and `type: "Api"`. The `rel` field is a resource-type label (e.g. `"Tasks"`) — never `"next"`. n8n caches loadOptions results, so after a code change you must restart n8n **and** switch to a different workflow (to bust the cache) before the dropdown re-fetches.
+- **Update operation UI flow**: Workflow Name or ID (dropdown) → Run Name or ID (plain string, accepts pasted ID or expression) → Update Fields (metadata: name, status, dueDate, shared) → Form Fields (resource mapper, loads from selected workflow) → Multi-Select Values (multiOptions checkboxes). The form fields and multi-select sections are shared with Create and use the same `getFormFields` resource mapper and `getMultiSelectFieldOptions` loader, both keyed off `workflowId`. Only fields with values are sent — empty fields are skipped, preserving current values.
 - **"Find or Create"**: Implement as a `searchBeforeCreate` boolean toggle on Create operations, not as a separate operation.
 - **Webhook triggers**: Use `webhookMethods.default` with `checkExists`, `create`, `delete` methods. Store webhook ID in `this.getWorkflowStaticData('node')`.
 - **Polling triggers**: Set `polling: true`, implement `poll()` method, store previous state in `getWorkflowStaticData('node')`. Include first-run guard. *(Note: the Data Set polling trigger was removed — data set functionality is not used in this package.)*

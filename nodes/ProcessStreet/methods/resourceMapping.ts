@@ -20,11 +20,9 @@ function getParamValue(ctx: ILoadOptionsFunctions, paramName: string): string {
 /** Field types excluded from the resource mapper entirely (unsupported via API). */
 const EXCLUDED_FIELD_TYPES = new Set([
 	'SendRichEmail',
-	'File',
 	'Subtasks',
 	'SubChecklist',
 	'Table',
-	'Hidden',
 ]);
 
 const BASE = 'https://public-api.process.st/api/v1.1';
