@@ -61,7 +61,7 @@ Real-time triggers powered by Process Street webhooks:
 
 ## Resources
 
-- [Process Street API Documentation](https://public-api.process.st/api/v1.1/docs/index.html)
+- [Process Street API Documentation](https://www.process.st/help/docs/process-street-api)
 - [n8n Community Nodes Documentation](https://docs.n8n.io/integrations/community-nodes/)
 
 ## License
