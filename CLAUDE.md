@@ -183,7 +183,19 @@ Each form field from `GET /workflows/{id}/form-fields` has: `id`, `fieldType`, `
 
 ## Publishing
 
-1. Update version in package.json
-2. Create GitHub Release with tag (e.g., `v0.1.0`)
-3. GitHub Actions workflow publishes to npm with provenance
-4. Submit to n8n Creator Portal for community verification
+The release flow is automated via `.github/workflows/publish.yml` using npm's **OIDC trusted publishing** — no `NPM_TOKEN` secret is stored or needed. The trusted publisher is configured on the npm package at https://www.npmjs.com/package/n8n-nodes-process-street/access pointing at `wwelti/n8n-nodes-process-street` + `publish.yml`.
+
+### Normal release flow
+
+1. Bump `version` in package.json
+2. Commit, tag (`git tag v0.x.y`), push both (`git push && git push --tags`)
+3. On GitHub: Releases → Draft a new release → pick the existing tag → Publish
+4. The `release: published` event fires the workflow, which publishes to npm with provenance
+5. Optionally, submit to the n8n Creator Portal for community verification
+
+### Constraints and gotchas
+
+- **Node 24+ required on the runner.** Node 22 ships with npm 10.x, which doesn't support OIDC trusted publishing and can't self-upgrade cleanly (hits `MODULE_NOT_FOUND` on `promise-retry`). `npm publish --provenance` needs npm 11.5.1+, which Node 24 bundles.
+- **Never add `NODE_AUTH_TOKEN` / `NPM_TOKEN`** back to the workflow. With trusted publishing, the OIDC token is exchanged for a short-lived publish token automatically. An `NPM_TOKEN` in the env actively interferes with the OIDC flow.
+- **Don't trust "Re-run failed jobs" after fixing the workflow.** GitHub Actions snapshots the workflow file at the commit the release was created against. If you edit and force-push the tag, the re-run still uses the **original** snapshot. To apply a workflow fix to an existing release: delete the GitHub Release (keeps the tag), then "Draft a new release" against the same tag — this fires a fresh `release: published` event that pulls the workflow from the current tag commit.
+- **First publish needs a workaround for provenance.** npm's trusted publisher config can only be added once a package exists on the registry. For the very first release, publish a throwaway prerelease manually (`npm publish --access public --tag <label>` — prerelease versions like `0.1.0-setup` require an explicit non-`latest` dist-tag), configure the trusted publisher in the npm UI, then publish the real version through Actions. Unpublish the throwaway within 72 hours via `npm unpublish <pkg>@<version>`.
