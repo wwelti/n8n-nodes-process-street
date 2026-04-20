@@ -15,9 +15,13 @@
 		"name": "Walt Welti",
 		"email": "walt@apmproperties.com"
 	},
+	"homepage": "https://github.com/wwelti/n8n-nodes-process-street#readme",
 	"repository": {
 		"type": "git",
-		"url": ""
+		"url": "git+https://github.com/wwelti/n8n-nodes-process-street.git"
+	},
+	"bugs": {
+		"url": "https://github.com/wwelti/n8n-nodes-process-street/issues"
 	},
 	"main": "dist/nodes/ProcessStreet/ProcessStreet.node.js",
 	"files": [

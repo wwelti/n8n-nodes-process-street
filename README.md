@@ -19,6 +19,8 @@ You need a Process Street API Key to use this node:
 
 ## Operations
 
+![Process Street action node — actions list and Create Workflow Run parameters](assets/node-actions.png)
+
 ### Workflow Run
 
 | Operation | Description |
@@ -29,7 +31,11 @@ You need a Process Street API Key to use this node:
 | Get | Get a workflow run by ID |
 | Update | Update a workflow run's name, status, due date, or sharing |
 
+Form fields for the selected workflow load dynamically via a resource mapper, and MultiSelect options appear as native checkboxes.
+
 ## Triggers
+
+![Process Street trigger node — triggers list and On Task Checked parameters](assets/node-triggers.png)
 
 ### Process Street Trigger (Webhook)
 
@@ -39,6 +45,8 @@ Real-time triggers powered by Process Street webhooks:
 - **Task Ready** — when a task is ready to be worked on
 - **Workflow Run Completed** — when a workflow run is completed
 - **Workflow Run Created** — when a new workflow run is created
+
+> **Note on testing triggers:** Process Street's webhook API rejects n8n's ephemeral `/webhook-test/...` URLs, so the "Listen for test event" button does not register a webhook. To receive events, **activate the workflow** in n8n — that exposes the production `/webhook/...` URL, which Process Street accepts.
 
 ## Known Limitations
 
