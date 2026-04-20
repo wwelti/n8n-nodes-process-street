@@ -32,7 +32,7 @@ nodes/ProcessStreet/
 - **Test auth**: `GET /testAuth` returns `{ apiKeyLabel: string }`
 - **Pagination**: 20 items/page, link-based. The response includes a top-level `links` array. The next-page link has `name: "next"` and `type: "Api"` — the `rel` field is a resource-type label (e.g. `"Tasks"`, `"Workflow Run"`) and is never `"next"`. Always find the next page with `links.find(l => l.name === 'next')?.href`.
 - **Rate limiting**: 429 status with `Retry-After` header
-- **Docs**: https://public-api.process.st/api/v1.1/docs/index.html
+- **Docs**: https://www.process.st/help/docs/process-street-api (the old `public-api.process.st/.../docs/index.html` page renders blank)
 
 ### Key Endpoints
 
