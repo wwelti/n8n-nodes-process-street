@@ -4,9 +4,10 @@ import type {
 	INodeExecutionData,
 	INodeType,
 	INodeTypeDescription,
+	JsonObject,
 	ResourceMapperValue,
 } from 'n8n-workflow';
-import { NodeOperationError } from 'n8n-workflow';
+import { NodeApiError, NodeOperationError } from 'n8n-workflow';
 
 import {
 	processStreetApiRequest,
@@ -150,41 +151,58 @@ async function handleWorkflowRun(
 			}
 		}
 
-		// 3. Group entries by field ID and send one API call per unique field
+		// 3. Group entries by field ID and send one API call per unique field.
+		// Route through processStreetApiRequest so HTTP errors arrive as
+		// NodeApiError with the response status code and body preserved.
 		if (allFields.length > 0) {
 			const runData = (createdRun.workflowRun ?? createdRun) as IDataObject;
 			const workflowRunId = runData.id as string;
-			const errors: string[] = [];
+			const errors: Array<{ fieldId: string; preview: string; error: NodeApiError }> = [];
 
 			for (const field of allFields) {
+				const preview = String(
+					(field as { value?: unknown }).value
+						?? (field as { values?: unknown[] }).values?.join(', ')
+						?? '',
+				).substring(0, 50);
 				try {
-					const requestBody = JSON.parse(
-						JSON.stringify({ fields: [field] }),
-					) as IDataObject;
-					await ctx.helpers.httpRequestWithAuthentication.call(
+					await processStreetApiRequest.call(
 						ctx,
-						'processStreetApi',
-						{
-							method: 'POST',
-							url: `https://public-api.process.st/api/v1.1/workflow-runs/${encodeURIComponent(workflowRunId)}/form-fields`,
-							body: requestBody,
-							json: true,
-						},
+						'POST',
+						`/workflow-runs/${encodeURIComponent(workflowRunId)}/form-fields`,
+						{ fields: [field] } as IDataObject,
 					);
 				} catch (error) {
-					const e = error as any;
-					const msg = e?.message || 'Unknown error';
-					errors.push(`Field ${field.id} ("${String(field.value).substring(0, 50)}"): ${msg}`);
+					errors.push({
+						fieldId: field.id,
+						preview,
+						error: error as NodeApiError,
+					});
 				}
 			}
 
 			if (errors.length > 0) {
-				const errorDetail = errors.join('\n');
+				const errorDetail = errors
+					.map(({ fieldId, preview, error }) => {
+						const status = error.httpCode ? ` [HTTP ${error.httpCode}]` : '';
+						const body = error.description ? `\n  ${error.description}` : '';
+						return `Field ${fieldId} ("${preview}")${status}: ${error.message}${body}`;
+					})
+					.join('\n');
+
 				if (!ctx.continueOnFail()) {
-					throw new NodeOperationError(
+					throw new NodeApiError(
 						ctx.getNode(),
-						`Workflow run created (ID: ${workflowRunId}) but ${errors.length} field(s) failed:\n${errorDetail}`,
-						{ itemIndex: i },
+						errors[0].error as unknown as JsonObject,
+						{
+							message:
+								errors.length === 1
+									? `Workflow run created (ID: ${workflowRunId}), but updating form field ${errors[0].fieldId} failed`
+									: `Workflow run created (ID: ${workflowRunId}) but ${errors.length} form field updates failed`,
+							description: errorDetail,
+							httpCode: errors[0].error.httpCode ?? undefined,
+							itemIndex: i,
+						},
 					);
 				}
 				(runData as IDataObject).formFieldError = errorDetail;
@@ -298,39 +316,47 @@ async function handleWorkflowRun(
 			}
 		}
 
-		// 3. Send form field updates one at a time
-		const errors: string[] = [];
+		// 3. Send form field updates one at a time. Route through
+		// processStreetApiRequest so HTTP errors arrive as NodeApiError with
+		// the response status code and body preserved.
+		const errors: Array<{ fieldId: string; error: NodeApiError }> = [];
 		for (const field of allFields) {
 			try {
-				const requestBody = JSON.parse(
-					JSON.stringify({ fields: [field] }),
-				) as IDataObject;
-				await ctx.helpers.httpRequestWithAuthentication.call(
+				await processStreetApiRequest.call(
 					ctx,
-					'processStreetApi',
-					{
-						method: 'POST',
-						url: `https://public-api.process.st/api/v1.1/workflow-runs/${encodeURIComponent(workflowRunId)}/form-fields`,
-						body: requestBody,
-						json: true,
-					},
+					'POST',
+					`/workflow-runs/${encodeURIComponent(workflowRunId)}/form-fields`,
+					{ fields: [field] } as IDataObject,
 				);
 			} catch (error) {
-				const e = error as any;
-				const msg = e?.message || 'Unknown error';
-				errors.push(`Field ${field.id}: ${msg}`);
+				errors.push({ fieldId: field.id, error: error as NodeApiError });
 			}
 		}
 
 		const result = { ...current, ...updateFields } as IDataObject;
 
 		if (errors.length > 0) {
-			const errorDetail = errors.join('\n');
+			const errorDetail = errors
+				.map(({ fieldId, error }) => {
+					const status = error.httpCode ? ` [HTTP ${error.httpCode}]` : '';
+					const body = error.description ? `\n  ${error.description}` : '';
+					return `Field ${fieldId}${status}: ${error.message}${body}`;
+				})
+				.join('\n');
+
 			if (!ctx.continueOnFail()) {
-				throw new NodeOperationError(
+				throw new NodeApiError(
 					ctx.getNode(),
-					`Workflow run updated but ${errors.length} form field(s) failed:\n${errorDetail}`,
-					{ itemIndex: i },
+					errors[0].error as unknown as JsonObject,
+					{
+						message:
+							errors.length === 1
+								? `Workflow run updated, but updating form field ${errors[0].fieldId} failed`
+								: `Workflow run updated but ${errors.length} form field updates failed`,
+						description: errorDetail,
+						httpCode: errors[0].error.httpCode ?? undefined,
+						itemIndex: i,
+					},
 				);
 			}
 			result.formFieldError = errorDetail;
