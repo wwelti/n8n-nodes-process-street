@@ -8,6 +8,8 @@ This is an n8n community node for [Process Street](https://www.process.st/) — 
 
 Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) in the n8n community nodes documentation.
 
+> On native Windows, see [Troubleshooting](#troubleshooting) if the Community Nodes dialog fails to install the package.
+
 ## Credentials
 
 You need a Process Street API Key to use this node:
@@ -58,6 +60,27 @@ Real-time triggers powered by Process Street webhooks:
 
 - Requires n8n version 1.0.0 or later
 - Uses n8n Nodes API version 1
+
+## Troubleshooting
+
+Most users install this package through n8n's **Settings → Community Nodes** dialog on Linux, macOS, or Docker without issue. The two known gotchas are both native-Windows-specific:
+
+### `spawn npm ENOENT` when installing from the Community Nodes dialog
+
+n8n on native Windows can fail to locate `npm` (it's `npm.cmd`, which Node's `spawn` won't auto-resolve without `shell: true`). This is an n8n-on-Windows limitation, not a problem with this package. Workaround — install manually into n8n's user nodes directory:
+
+```bash
+cd %USERPROFILE%\.n8n\nodes
+npm install n8n-nodes-process-street --omit=peer --ignore-scripts
+```
+
+Then restart n8n.
+
+### `node-gyp` / Python errors about `isolated-vm` during install
+
+`isolated-vm` is a native module pulled in transitively via `n8n-workflow`. It ships prebuilt binaries for Node LTS versions (20, 22). If you're on a non-LTS Node (e.g. 25), the prebuild lookup misses and npm falls back to compiling from source, which requires Python and a C++ toolchain.
+
+The `--ignore-scripts` flag above avoids the compile entirely. n8n resolves `n8n-workflow` from its own install at runtime, so you don't need a working copy in the user nodes directory. Switching to Node 22 LTS also fixes it permanently.
 
 ## Resources
 
