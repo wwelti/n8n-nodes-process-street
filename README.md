@@ -63,7 +63,7 @@ Real-time triggers powered by Process Street webhooks:
 
 ## Troubleshooting
 
-Most users install this package through n8n's **Settings → Community Nodes** dialog on Linux, macOS, or Docker without issue. The two known gotchas are both native-Windows-specific:
+Most users install this package through n8n's **Settings → Community Nodes** dialog on Linux, macOS, n8n Cloud, or Docker without issue. The two known gotchas are both native-Windows-specific:
 
 ### `spawn npm ENOENT` when installing from the Community Nodes dialog
 
