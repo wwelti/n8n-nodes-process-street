@@ -242,11 +242,17 @@ async function handleWorkflowRun(
 			// API may return the run directly or nested under a key
 			current = (response.workflowRun ?? response) as IDataObject;
 		} catch (error) {
-			throw new NodeOperationError(
-				ctx.getNode(),
-				`Could not find workflow run with ID "${workflowRunId}". Make sure the ID is correct and the run exists.`,
-				{ itemIndex: i },
-			);
+			// Only rewrite the message for true 404s — for any other status
+			// (401/403/429/5xx/network) preserve the original NodeApiError so
+			// the n8n UI keeps the HTTP status code and response body.
+			const httpCode = (error as { httpCode?: string | number })?.httpCode;
+			if (String(httpCode) === '404') {
+				throw new NodeApiError(ctx.getNode(), error as JsonObject, {
+					message: `Could not find workflow run with ID "${workflowRunId}". Make sure the ID is correct and the run exists.`,
+					itemIndex: i,
+				});
+			}
+			throw error;
 		}
 
 		const body: IDataObject = {
