@@ -50,6 +50,15 @@ Real-time triggers powered by Process Street webhooks:
 
 > **Note on testing triggers:** Process Street's webhook API rejects n8n's ephemeral `/webhook-test/...` URLs, so the "Listen for test event" button does not register a webhook. To receive events, **activate the workflow** in n8n — that exposes the production `/webhook/...` URL, which Process Street accepts.
 
+#### Complete form fields on every event
+
+Process Street's webhook payloads only include the form fields for the section that fired the event (for example, **Task Checked** sends just the checked task's fields under `data.formFields`). To save you a follow-up API call, the trigger automatically fetches the **entire** workflow run's form fields and adds two properties to each event:
+
+- **`allFormFields`** — every field on the run, in the Process Street API's raw shape (the value is nested under `data.value`, the type is under `fieldType`).
+- **`flatFields`** — the same fields simplified to `{ fieldType, label, value }` for easy access, so you can do `{{ $json.flatFields.find(f => f.label === 'Market rent:').value }}` without digging into nested objects.
+
+The original `data.formFields` is left untouched. If the lookup fails for any reason, the event is still delivered with an `allFormFieldsError` message instead of being dropped.
+
 ## Known Limitations
 
 - **Comment triggers** (New Comment, New Comment Attachment) are not supported because the Process Street v1.1 API does not expose comment endpoints or webhook triggers for comments.
