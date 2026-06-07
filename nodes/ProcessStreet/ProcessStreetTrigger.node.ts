@@ -7,8 +7,46 @@ import type {
 	IWebhookResponseData,
 } from 'n8n-workflow';
 
-import { processStreetApiRequest } from './transport/processStreetApi';
+import {
+	processStreetApiRequest,
+	processStreetApiRequestAllItems,
+} from './transport/processStreetApi';
 import { getWorkflows, getTasks } from './methods/loadOptions';
+
+/**
+ * Build a simplified, lookup-friendly view of the run's form fields.
+ *
+ * The `/workflow-runs/{id}/form-fields` endpoint returns a verbose shape (value
+ * nested under `data`, type under `fieldType`, and some fields with no `label`).
+ * `flatFields` flattens each entry to `{ fieldType, label, value }` so downstream
+ * nodes can do `flatFields.find(f => f.label === '...').value` without digging.
+ *
+ * - `label` falls back to `key` because MultiSelect/SendRichEmail fields come back
+ *   with no label — this keeps every entry identifiable.
+ * - `value` is unwrapped per field type: `data.value` (single-value), `data.values`
+ *   (multi-value), the file object for File fields, or `null` for empty fields.
+ */
+function flattenFormFields(fields: IDataObject[]): IDataObject[] {
+	return fields.map((field) => {
+		const data = field.data as IDataObject | null | undefined;
+		let value: IDataObject[string] = null;
+		if (data && typeof data === 'object') {
+			if ('value' in data) {
+				value = data.value;
+			} else if ('values' in data) {
+				value = data.values;
+			} else {
+				// File fields (and any other object payloads) have no value/values key.
+				value = data;
+			}
+		}
+		return {
+			fieldType: field.fieldType,
+			label: (field.label as string) ?? (field.key as string),
+			value,
+		};
+	});
+}
 
 export class ProcessStreetTrigger implements INodeType {
 	description: INodeTypeDescription = {
@@ -177,9 +215,58 @@ export class ProcessStreetTrigger implements INodeType {
 	};
 
 	async webhook(this: IWebhookFunctions): Promise<IWebhookResponseData> {
-		const body = this.getBodyData() as IDataObject;
+		const body = this.getBodyData();
+
+		// Process Street POSTs a top-level array of event objects, but guard for
+		// the single-object case too. Each event is enriched in place.
+		const events: IDataObject[] = Array.isArray(body)
+			? (body as IDataObject[])
+			: [body as IDataObject];
+
+		// The webhook payload only embeds the form fields for the section that
+		// triggered the event (e.g. the checked task), not every field on the run.
+		// Fetch the complete field set for the run and attach it under two new keys,
+		// leaving the original `data.formFields` untouched:
+		//   - `allFormFields`: the raw, faithful API response (paginated)
+		//   - `flatFields`: a simplified `{ fieldType, label, value }` view for lookups
+		// Results are cached per run ID so a batched payload makes one call per run.
+		const fieldsByRunId = new Map<string, IDataObject[]>();
+
+		for (const event of events) {
+			const data = (event?.data ?? {}) as IDataObject;
+			const checklist = (data.checklist ?? {}) as IDataObject;
+			// Task events carry the run id under data.checklist.id; workflow-run
+			// events (Created/Completed) have the run itself as data, so fall back
+			// to data.id.
+			const runId = (checklist.id as string) || (data.id as string);
+
+			if (!runId) {
+				continue;
+			}
+
+			try {
+				let fields = fieldsByRunId.get(runId);
+				if (!fields) {
+					fields = await processStreetApiRequestAllItems.call(
+						this,
+						'GET',
+						`/workflow-runs/${encodeURIComponent(runId)}/form-fields`,
+					);
+					fieldsByRunId.set(runId, fields);
+				}
+				event.allFormFields = fields;
+				event.flatFields = flattenFormFields(fields);
+			} catch (error) {
+				// The webhook responds onReceived, so a failed enrichment must not
+				// drop the event. Emit the original payload and surface the error so
+				// the gap is visible downstream rather than silently missing.
+				event.allFormFieldsError =
+					(error as Error)?.message ?? 'Failed to fetch all form fields';
+			}
+		}
+
 		return {
-			workflowData: [this.helpers.returnJsonArray(body)],
+			workflowData: [this.helpers.returnJsonArray(events)],
 		};
 	}
 }

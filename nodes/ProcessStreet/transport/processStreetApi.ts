@@ -167,6 +167,7 @@ export async function processStreetApiRequestAllItems(
 				'users',
 				'assignees',
 				'fields',
+				'formFields',
 				'approvals',
 			]) {
 				if (Array.isArray(items[key])) {

@@ -50,7 +50,7 @@ nodes/ProcessStreet/
 | PUT | /workflow-runs/{id}/tasks/{taskId} | Update task (status, dueDate) |
 | GET | /workflows/{id}/form-fields | List form field definitions for a workflow template |
 | GET | /workflows/{id}/form-fields/{fieldId}/options | Get choices for a Select/MultiSelect field (see note below) |
-| GET | /workflow-runs/{id}/form-fields | Get form field values for a workflow run |
+| GET | /workflow-runs/{id}/form-fields | Get form field values for a workflow run (used by the trigger to enrich `allFormFields` — see "Trigger Output Enrichment") |
 | POST | /workflow-runs/{id}/form-fields | Update form field values (see Multi-Select note below) |
 | POST | /webhooks | Create webhook (body: { url, triggers[], workflowId?, taskId? }) |
 | DELETE | /webhooks/{id} | Delete webhook |
@@ -66,6 +66,17 @@ Process Street's `POST /webhooks` **rejects n8n's `/webhook-test/...` URLs** wit
 To test the trigger, users must **activate the workflow** in n8n, which exposes the production `/webhook/{id}/webhook` URL. Process Street accepts that URL and fires real events against it.
 
 The trigger node's `description` surfaces this so users see it in the node panel before hitting the wall. If you ever add a separate "test" affordance, it will need to go through Process Street's real event flow (or be mocked), not n8n's ephemeral test URL.
+
+### Trigger Output Enrichment (Key Discovery)
+
+Process Street's webhook payloads only embed the form fields for the **section that triggered the event** (e.g. for `TaskChecked`, only the checked task's fields under `data.formFields`) — NOT every field on the run. To give users the whole run, `ProcessStreetTrigger.node.ts`'s `webhook()` enriches each event in place:
+
+- Extracts the run ID: `data.checklist.id` (task events) with fallback to `data.id` (WorkflowRunCreated/Completed, where `data` *is* the run).
+- Fetches the full field set via `GET /workflow-runs/{runId}/form-fields` using `processStreetApiRequestAllItems` (paginated — a run can have well over 20 fields; the helper's auto-detect key list includes `formFields` for this endpoint).
+- Attaches two new keys to the emitted event, leaving the original `data.formFields` untouched:
+  - **`allFormFields`**: the raw, faithful API response. Note its shape differs from the embedded `data.formFields`: value is nested under **`data.value`** (or `data.values` for multi-value, a file object for File fields, `null` when empty), type is under **`fieldType`** (not `type`), and some fields (MultiSelect, SendRichEmail) have only `key` with no `label`.
+  - **`flatFields`**: a simplified `{ fieldType, label, value }` view (built by `flattenFormFields()`) so downstream nodes can do `flatFields.find(f => f.label === '...').value` without digging. `label` falls back to `key` so no entry is anonymous; `value` is unwrapped per field type.
+- Enrichment is wrapped per-event in try/catch. Because the webhook uses `responseMode: 'onReceived'`, a failed lookup must NOT drop the event — on error it emits the original payload plus an `allFormFieldsError` string so the gap is visible downstream rather than silently missing.
 
 ### API Response Keys
 
