@@ -154,7 +154,7 @@ export async function getMultiSelectFieldOptions(
 		const ft = String(f.fieldType ?? '').toLowerCase();
 		return (
 			MULTI_SELECT_FIELD_TYPES.has(ft) ||
-			(ft.startsWith('multi') && ft !== 'multiline')
+			(ft.startsWith('multi') && ft !== 'multiline' && ft !== 'multifile')
 		);
 	});
 
@@ -250,7 +250,7 @@ export async function getMultiSelectFormFields(
 			const ft = String(f.fieldType ?? '').toLowerCase();
 			return (
 				MULTI_SELECT_FIELD_TYPES.has(ft) ||
-				(ft.startsWith('multi') && ft !== 'multiline')
+				(ft.startsWith('multi') && ft !== 'multiline' && ft !== 'multifile')
 			);
 		})
 		.map((f: any) => ({

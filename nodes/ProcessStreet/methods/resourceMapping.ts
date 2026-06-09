@@ -81,7 +81,7 @@ function isMultiSelectType(ft: string): boolean {
 		ft === 'multipleselection' ||
 		ft === 'multi-select' ||
 		ft === 'checklist' ||
-		(ft.startsWith('multi') && ft !== 'multiline')
+		(ft.startsWith('multi') && ft !== 'multiline' && ft !== 'multifile')
 	);
 }
 

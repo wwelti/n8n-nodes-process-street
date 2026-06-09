@@ -35,6 +35,10 @@ You need a Process Street API Key to use this node:
 
 Form fields for the selected workflow load dynamically via a resource mapper, and MultiSelect options appear as native checkboxes.
 
+#### File and MultiFile fields
+
+For **File** and **MultiFile** form fields, enter a **file URL** — for example, a PDF URL produced by an upstream node (Docupilot, an HTTP Request download, etc.). The node downloads the file from that URL and uploads the bytes to Process Street, so the file becomes viewable on the workflow run. (Process Street's API requires files to go through a dedicated upload endpoint; sending a plain text URL as the field value is rejected.) The filename is taken from the URL or the download's `Content-Disposition` header. The URL must be reachable by your n8n server.
+
 ## Triggers
 
 ![Process Street trigger node — triggers list and On Task Checked parameters](assets/node-triggers.png)

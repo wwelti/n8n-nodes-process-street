@@ -78,6 +78,29 @@ Process Street's webhook payloads only embed the form fields for the **section t
   - **`flatFields`**: a simplified `{ fieldType, label, value }` view (built by `flattenFormFields()`) so downstream nodes can do `flatFields.find(f => f.label === '...').value` without digging. `label` falls back to `key` so no entry is anonymous; `value` is unwrapped per field type.
 - Enrichment is wrapped per-event in try/catch. Because the webhook uses `responseMode: 'onReceived'`, a failed lookup must NOT drop the event — on error it emits the original payload plus an `allFormFieldsError` string so the gap is visible downstream rather than silently missing.
 
+### Uploading Files to File / MultiFile Fields (Key Discovery)
+
+`File` and `MultiFile` form fields **cannot** be set through the form-fields *value* endpoint (`POST /workflow-runs/{id}/form-fields`). Sending `{ id, value: <url> }` returns **400** with body `{ "error": "Files can only be uploaded to File form fields via the upload endpoint." }`. They must go through the dedicated upload endpoint:
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| POST | /workflow-runs/{id}/form-fields/{fieldId}/upload | Upload file(s) to a File/MultiFile field |
+| DELETE | /workflow-runs/{id}/form-fields/{fieldId}/upload | Remove all files |
+| DELETE | /workflow-runs/{id}/form-fields/{fieldId}/upload/{fileId} | Remove one file |
+
+The upload endpoint accepts the file **bytes**, not a URL — there is no `fileUrl` parameter. **Use `multipart/form-data` with a single `file` part** (binary). File fields accept exactly one file (replaces existing); MultiFile accepts up to 10 (appended).
+
+**Do NOT use the JSON `fileBase64` path** that the OpenAPI spec's `UploadFormFieldValueRequest` schema advertises — it does not work. Verified against the live API (2026-06): every JSON shape (`fileBase64` as array of `{content, filename}`, as a single object, raw base64 vs data-URI) is rejected by the request validator with contradictory `error.expected.jsobject`/`error.expected.jsarray` messages at `obj.fileBase64`. Multipart with field name `file` returns **204** and the file becomes viewable on the run (the field's `data` gains `{ id, url, name, mimeType }`).
+
+Because the n8n node takes a **URL** for File fields (e.g. a PDF URL from Docupilot — the same input Zapier accepts), `ProcessStreet.node.ts` bridges the gap: at execute time it builds a `fieldId → fieldType` map via `buildFieldTypeMap()` (`GET /workflows/{workflowId}/form-fields`), routes any File/MultiFile mapper value to `uploadFileFromUrl()`, which **downloads the URL** (`this.helpers.httpRequest` with `encoding: 'arraybuffer'`), then hands the bytes to `processStreetUploadFile()` in the transport module. That helper builds the multipart body **by hand** (Buffer concat of part header + file bytes + boundary footer) and POSTs it via `httpRequestWithAuthentication` with an explicit `multipart/form-data; boundary=…` header — no `form-data` package, preserving the zero-runtime-dependency rule. Filename is derived from `Content-Disposition`, then the URL path, with an extension inferred from `Content-Type` if missing; content type comes from the download's `Content-Type`. Upload failures are collected into the same per-field error list as value-endpoint failures.
+
+| Method | Body | Result |
+|--------|------|--------|
+| POST …/upload | `multipart/form-data`, part name `file` | ✅ 204, file attached |
+| POST …/upload | `application/json` `{ fileBase64: … }` | ❌ 400 validator error (any shape) |
+
+Note: `MultiFile` starts with `multi`, so the multi-select catch-all (`ft.startsWith('multi')`) in `resourceMapping.ts`/`loadOptions.ts` must explicitly exclude `multifile` (alongside `multiline`), or MultiFile fields get misrouted to the multi-select picker and hidden from the resource mapper.
+
 ### API Response Keys
 
 - `/workflows` returns `{ workflows: [...] }`

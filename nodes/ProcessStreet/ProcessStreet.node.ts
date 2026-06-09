@@ -12,6 +12,7 @@ import { NodeApiError, NodeOperationError } from 'n8n-workflow';
 import {
 	processStreetApiRequest,
 	processStreetApiRequestAllItems,
+	processStreetUploadFile,
 } from './transport/processStreetApi';
 import {
 	workflowRunFields,
@@ -58,6 +59,133 @@ function validateFutureDueDate(
 			{ itemIndex: i },
 		);
 	}
+}
+
+// Map common MIME types to file extensions so uploaded files keep a sensible
+// name (and a name Process Street's allowed-extension constraints accept).
+const CONTENT_TYPE_EXTENSIONS: Record<string, string> = {
+	'application/pdf': '.pdf',
+	'image/png': '.png',
+	'image/jpeg': '.jpg',
+	'image/gif': '.gif',
+	'image/webp': '.webp',
+	'application/msword': '.doc',
+	'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+	'application/vnd.ms-excel': '.xls',
+	'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+	'text/plain': '.txt',
+	'text/csv': '.csv',
+	'application/zip': '.zip',
+};
+
+/** True for Process Street form-field types that require the upload endpoint. */
+function isFileFieldType(fieldType: string | undefined): boolean {
+	return fieldType === 'file' || fieldType === 'multifile';
+}
+
+/**
+ * Fetch the workflow's form-field definitions and return a map of
+ * field ID → lowercased fieldType. Used to route File/MultiFile fields to the
+ * dedicated upload endpoint instead of the form-fields value endpoint.
+ */
+async function buildFieldTypeMap(
+	ctx: IExecuteFunctions,
+	workflowId: string,
+): Promise<Map<string, string>> {
+	const defs = (await processStreetApiRequestAllItems.call(
+		ctx,
+		'GET',
+		`/workflows/${encodeURIComponent(workflowId)}/form-fields`,
+	)) as Array<{ id?: unknown; fieldType?: unknown }>;
+	const map = new Map<string, string>();
+	for (const f of defs) {
+		if (f && f.id !== undefined) {
+			map.set(String(f.id), String(f.fieldType ?? '').toLowerCase());
+		}
+	}
+	return map;
+}
+
+/** Derive a filename (with extension) from a URL and/or the response headers. */
+function deriveUploadFilename(url: string, headers: IDataObject): string {
+	const cd = String(
+		headers['content-disposition'] ?? headers['Content-Disposition'] ?? '',
+	);
+	const cdMatch = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+	let filename = cdMatch?.[1]?.trim();
+
+	if (!filename) {
+		try {
+			const parsed = new URL(url);
+			const last = parsed.pathname.split('/').filter(Boolean).pop();
+			if (last) filename = decodeURIComponent(last);
+		} catch {
+			// not a parseable URL — fall through to the default below
+		}
+	}
+	if (!filename) filename = 'upload';
+
+	// Ensure the name carries an extension so Process Street serves it correctly.
+	if (!/\.[a-z0-9]{1,8}$/i.test(filename)) {
+		const ct = String(headers['content-type'] ?? headers['Content-Type'] ?? '')
+			.split(';')[0]
+			.trim()
+			.toLowerCase();
+		const ext = CONTENT_TYPE_EXTENSIONS[ct];
+		if (ext) filename += ext;
+	}
+	return filename;
+}
+
+/**
+ * Upload a file to a Process Street File/MultiFile form field.
+ *
+ * The form-fields *value* endpoint rejects File fields with a 400 ("Files can
+ * only be uploaded to File form fields via the upload endpoint."). Instead we
+ * download the file at `urlValue` and POST its bytes (multipart/form-data) to
+ * the dedicated upload endpoint — the same thing Zapier does behind the scenes.
+ */
+async function uploadFileFromUrl(
+	ctx: IExecuteFunctions,
+	workflowRunId: string,
+	fieldId: string,
+	urlValue: string,
+): Promise<void> {
+	const url = urlValue.trim();
+	if (!url) return;
+
+	let response: { body: Buffer | ArrayBuffer; headers?: IDataObject };
+	try {
+		response = (await ctx.helpers.httpRequest({
+			method: 'GET',
+			url,
+			encoding: 'arraybuffer',
+			returnFullResponse: true,
+		})) as { body: Buffer | ArrayBuffer; headers?: IDataObject };
+	} catch (error) {
+		throw new NodeOperationError(
+			ctx.getNode(),
+			`Could not download the file for File field ${fieldId} from "${url}": ${(error as Error).message}`,
+		);
+	}
+
+	const buffer = Buffer.isBuffer(response.body)
+		? response.body
+		: Buffer.from(response.body as ArrayBuffer);
+	const headers = (response.headers ?? {}) as IDataObject;
+	const filename = deriveUploadFilename(url, headers);
+	const contentType =
+		String(headers['content-type'] ?? headers['Content-Type'] ?? '')
+			.split(';')[0]
+			.trim() || 'application/octet-stream';
+
+	await processStreetUploadFile.call(
+		ctx,
+		`/workflow-runs/${encodeURIComponent(workflowRunId)}/form-fields/${encodeURIComponent(fieldId)}/upload`,
+		buffer,
+		filename,
+		contentType,
+	);
 }
 
 async function handleWorkflowRun(
@@ -113,11 +241,22 @@ async function handleWorkflowRun(
 		) as ResourceMapperValue;
 
 		const allFields: Array<{ id: string; value: string }> = [];
+		const fileFields: Array<{ id: string; url: string }> = [];
 
 		const mapperValues = formFieldsMapper.value;
 		if (mapperValues && typeof mapperValues === 'object') {
-			for (const [fieldId, fieldValue] of Object.entries(mapperValues)) {
-				if (fieldValue === null || fieldValue === undefined || fieldValue === '') continue;
+			const entries = Object.entries(mapperValues).filter(
+				([, v]) => v !== null && v !== undefined && v !== '',
+			);
+			// File/MultiFile fields must go through the dedicated upload endpoint,
+			// not the form-fields value endpoint. Fetch field types to route them.
+			const fieldTypeMap =
+				entries.length > 0 ? await buildFieldTypeMap(ctx, workflowId) : undefined;
+			for (const [fieldId, fieldValue] of entries) {
+				if (isFileFieldType(fieldTypeMap?.get(fieldId))) {
+					fileFields.push({ id: fieldId, url: String(fieldValue) });
+					continue;
+				}
 				allFields.push({
 					id: fieldId,
 					value: Array.isArray(fieldValue)
@@ -154,7 +293,7 @@ async function handleWorkflowRun(
 		// 3. Group entries by field ID and send one API call per unique field.
 		// Route through processStreetApiRequest so HTTP errors arrive as
 		// NodeApiError with the response status code and body preserved.
-		if (allFields.length > 0) {
+		if (allFields.length > 0 || fileFields.length > 0) {
 			const runData = (createdRun.workflowRun ?? createdRun) as IDataObject;
 			const workflowRunId = runData.id as string;
 			const errors: Array<{ fieldId: string; preview: string; error: NodeApiError }> = [];
@@ -175,6 +314,19 @@ async function handleWorkflowRun(
 				} catch (error) {
 					errors.push({
 						fieldId: field.id,
+						preview,
+						error: error as NodeApiError,
+					});
+				}
+			}
+
+			for (const file of fileFields) {
+				const preview = file.url.substring(0, 50);
+				try {
+					await uploadFileFromUrl(ctx, workflowRunId, file.id, file.url);
+				} catch (error) {
+					errors.push({
+						fieldId: file.id,
 						preview,
 						error: error as NodeApiError,
 					});
@@ -222,6 +374,7 @@ async function handleWorkflowRun(
 	}
 
 	if (operation === 'update') {
+		const workflowId = ctx.getNodeParameter('workflowId', i, '') as string;
 		const workflowRunId = (ctx.getNodeParameter('workflowRunId', i) as string).trim();
 		const updateFields = ctx.getNodeParameter('updateFields', i) as IDataObject;
 
@@ -278,6 +431,7 @@ async function handleWorkflowRun(
 
 		// ── Update form field values ────────────────────────────────────────
 		const allFields: Array<{ id: string; value?: string; values?: string[] }> = [];
+		const fileFields: Array<{ id: string; url: string }> = [];
 
 		// 1. Resource mapper fields
 		const formFieldsMapper = ctx.getNodeParameter(
@@ -288,8 +442,19 @@ async function handleWorkflowRun(
 
 		const mapperValues = formFieldsMapper.value;
 		if (mapperValues && typeof mapperValues === 'object') {
-			for (const [fieldId, fieldValue] of Object.entries(mapperValues)) {
-				if (fieldValue === null || fieldValue === undefined || fieldValue === '') continue;
+			const entries = Object.entries(mapperValues).filter(
+				([, v]) => v !== null && v !== undefined && v !== '',
+			);
+			// File/MultiFile fields must go through the dedicated upload endpoint.
+			const fieldTypeMap =
+				entries.length > 0 && workflowId
+					? await buildFieldTypeMap(ctx, workflowId)
+					: undefined;
+			for (const [fieldId, fieldValue] of entries) {
+				if (isFileFieldType(fieldTypeMap?.get(fieldId))) {
+					fileFields.push({ id: fieldId, url: String(fieldValue) });
+					continue;
+				}
 				allFields.push({
 					id: fieldId,
 					value: Array.isArray(fieldValue)
@@ -336,6 +501,15 @@ async function handleWorkflowRun(
 				);
 			} catch (error) {
 				errors.push({ fieldId: field.id, error: error as NodeApiError });
+			}
+		}
+
+		// 4. File/MultiFile fields go through the dedicated upload endpoint.
+		for (const file of fileFields) {
+			try {
+				await uploadFileFromUrl(ctx, workflowRunId, file.id, file.url);
+			} catch (error) {
+				errors.push({ fieldId: file.id, error: error as NodeApiError });
 			}
 		}
 

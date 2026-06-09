@@ -117,6 +117,59 @@ function buildProcessStreetApiError(
 }
 
 /**
+ * Upload a file to a Process Street File/MultiFile form field.
+ *
+ * The form-fields *value* endpoint rejects File fields ("Files can only be
+ * uploaded to File form fields via the upload endpoint."). The upload endpoint
+ * accepts `multipart/form-data` with a single `file` part. We build the
+ * multipart body by hand (Buffer concat) so the package keeps zero runtime
+ * dependencies — no `form-data` package, no global FormData ambiguity.
+ *
+ * Verified against the live API: a JSON `fileBase64` body is rejected by the
+ * request validator, but multipart with field name `file` returns 204 and the
+ * file becomes viewable on the run.
+ */
+export async function processStreetUploadFile(
+	this: ContextType,
+	endpoint: string,
+	fileBuffer: Buffer,
+	filename: string,
+	contentType: string,
+): Promise<any> {
+	const boundary = `----n8nProcessStreetBoundary${Math.random()
+		.toString(16)
+		.slice(2)}${Math.random().toString(16).slice(2)}`;
+	// Strip characters that would break the Content-Disposition header.
+	const safeName = filename.replace(/[\r\n"]/g, '') || 'upload';
+	const preamble = Buffer.from(
+		`--${boundary}\r\n` +
+			`Content-Disposition: form-data; name="file"; filename="${safeName}"\r\n` +
+			`Content-Type: ${contentType}\r\n\r\n`,
+		'utf8',
+	);
+	const epilogue = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
+	const body = Buffer.concat([preamble, fileBuffer, epilogue]);
+
+	try {
+		return await this.helpers.httpRequestWithAuthentication.call(
+			this,
+			'processStreetApi',
+			{
+				method: 'POST',
+				url: `${BASE_URL}${endpoint}`,
+				body,
+				headers: {
+					'Content-Type': `multipart/form-data; boundary=${boundary}`,
+				},
+				json: false,
+			},
+		);
+	} catch (error) {
+		throw buildProcessStreetApiError.call(this, error, 'POST', endpoint);
+	}
+}
+
+/**
  * Fetch all pages of results from a paginated Process Street API endpoint.
  * Process Street uses link-based pagination with 20 items per page.
  * The response includes a `links` array; a link with rel "next" points to the next page.
